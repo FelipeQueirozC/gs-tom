@@ -1,0 +1,5 @@
+beautifulsoup4>=4.12
+playwright>=1.44
+requests>=2.31
+resend>=2.0
+tzdata>=2025.2
