@@ -362,11 +362,15 @@ def require_playwright() -> Any:
     return sync_playwright
 
 
-def goto_with_retry(page: Any, url: str, wait_until: str = "networkidle") -> None:
+def goto_with_retry(page: Any, url: str, wait_until: str = "domcontentloaded") -> None:
     last_error: Optional[Exception] = None
     for attempt in range(1, PLAYWRIGHT_RETRIES + 1):
         try:
             page.goto(url, wait_until=wait_until, timeout=PLAYWRIGHT_TIMEOUT_MS)
+            try:
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                logging.debug("Network idle was not reached for %s; continuing to selector checks.", url)
             return
         except Exception as exc:
             last_error = exc
@@ -423,16 +427,13 @@ def extract_detail_with_page(page: Any, candidate: ReportCandidate, fallback_dat
     goto_with_retry(page, candidate.page_url)
     page.wait_for_selector("body", timeout=PLAYWRIGHT_TIMEOUT_MS)
     html_text = page.content()
-    title = extract_title_from_detail_html(html_text) or candidate.hub_title
-    date_iso = extract_date_from_detail_html(html_text) or candidate.hub_date or fallback_date
+    detail_title = extract_title_from_detail_html(html_text)
+    detail_date = extract_date_from_detail_html(html_text)
+    title = detail_title or candidate.hub_title
     candidate.title = clean_title(title or candidate.hub_title)
-    candidate.date = date_iso
-    candidate.title_source = "detail" if title else "hub"
-    candidate.date_source = (
-        "detail"
-        if extract_date_from_detail_html(html_text)
-        else ("hub" if candidate.hub_date else "fallback")
-    )
+    candidate.date = detail_date or candidate.hub_date or fallback_date
+    candidate.title_source = "detail" if detail_title else "hub"
+    candidate.date_source = "detail" if detail_date else ("hub" if candidate.hub_date else "fallback")
     candidate.summary = extract_summary_from_detail_html(html_text)
     candidate.pdf_url = find_pdf_link_from_detail_html(html_text, candidate.page_url) or ""
     if not candidate.pdf_url:

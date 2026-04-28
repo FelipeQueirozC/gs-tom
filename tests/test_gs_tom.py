@@ -1,10 +1,14 @@
 import datetime as dt
 import os
-from pathlib import Path
 
 import pytest
 
 import gs_tom
+
+
+class FakePdfPath:
+    def read_bytes(self):
+        return b"%PDF test"
 
 
 def test_parse_card_date_and_detail_date_precedence():
@@ -87,9 +91,7 @@ def test_processed_and_sorting_state_behavior():
     assert not gs_tom.processed(state, new)
 
 
-def test_resend_payload_with_attachment(tmp_path: Path):
-    pdf_path = tmp_path / "report.pdf"
-    pdf_path.write_bytes(b"%PDF test")
+def test_resend_payload_with_attachment():
     candidate = gs_tom.ReportCandidate(
         page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
         title="Sample",
@@ -98,16 +100,14 @@ def test_resend_payload_with_attachment(tmp_path: Path):
         pdf_url="https://www.goldmansachs.com/pdfs/sample.pdf",
     )
     config = gs_tom.ResendConfig("re_test", "GS <gs@example.com>", ["to@example.com"])
-    params = gs_tom.build_resend_params(config, candidate, pdf_path, "2026-03-23 GS ToM Sample.pdf", True)
+    params = gs_tom.build_resend_params(config, candidate, FakePdfPath(), "2026-03-23 GS ToM Sample.pdf", True)
     assert params["subject"] == "2026-03-23 GS ToM Sample"
     assert params["to"] == ["to@example.com"]
     assert params["attachments"][0]["filename"] == "2026-03-23 GS ToM Sample.pdf"
-    assert "UERG" in params["attachments"][0]["content"]
+    assert params["attachments"][0]["content"].startswith("JVBER")
 
 
-def test_resend_payload_link_only(tmp_path: Path):
-    pdf_path = tmp_path / "report.pdf"
-    pdf_path.write_bytes(b"%PDF test")
+def test_resend_payload_link_only():
     candidate = gs_tom.ReportCandidate(
         page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
         title="Sample",
@@ -115,7 +115,7 @@ def test_resend_payload_link_only(tmp_path: Path):
         pdf_url="https://www.goldmansachs.com/pdfs/sample.pdf",
     )
     config = gs_tom.ResendConfig("re_test", "GS <gs@example.com>", ["to@example.com"])
-    params = gs_tom.build_resend_params(config, candidate, pdf_path, "unused.pdf", False)
+    params = gs_tom.build_resend_params(config, candidate, FakePdfPath(), "unused.pdf", False)
     assert "attachments" not in params
     assert "larger than the attachment limit" in params["html"]
     assert "Direct PDF link" in params["html"]
@@ -151,6 +151,6 @@ def test_live_playwright_extracts_hub_cards_and_detail_metadata():
 
     assert detail.display_title
     assert detail.date
-    assert detail.date_source in {"detail", "hub", "fallback"}
+    assert detail.date_source == "detail"
     assert detail.pdf_url.startswith("https://")
     assert gs_tom.is_allowed_host(detail.pdf_url)

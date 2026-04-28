@@ -1,4 +1,5 @@
 output/
+.pw-browsers/
 __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
