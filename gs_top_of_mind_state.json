@@ -261,5 +261,21 @@
     "title_source": "detail",
     "date_source": "detail",
     "ts": 1777428327.8691564
+  },
+  "https://www.goldmansachs.com/insights/top-of-mind/cracks-in-private-credit": {
+    "status": "ok",
+    "title": "Cracks in Private Credit",
+    "date": "2026-04-29",
+    "page": "https://www.goldmansachs.com/insights/top-of-mind/cracks-in-private-credit",
+    "pdf": "https://www.goldmansachs.com/pdfs/insights/goldman-sachs-research/cracks-in-private-credit/TOM_private%20credit_Redacted.pdf",
+    "summary": "After over a decade of rapid growth and relative calm, the private credit market has come under pressure.",
+    "hub_title": "Cracks in Private Credit",
+    "hub_date": "2026-04-29",
+    "title_source": "detail",
+    "date_source": "detail",
+    "ts": 1777481229.6337173,
+    "file": "/home/runner/work/gs-tom/gs-tom/output/2026-04-29 GS ToM Cracks in Private Credit.pdf",
+    "email_id": "c11ad10f-9c42-4d0d-a518-1a1ddb9eda60",
+    "attachment_sent": true
   }
 }
