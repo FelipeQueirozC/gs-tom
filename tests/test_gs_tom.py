@@ -33,7 +33,7 @@ def test_extract_detail_title_summary_and_pdf():
       </body>
     </html>
     """
-    assert gs_tom.extract_title_from_detail_html(html) == "Top of Mind: Data Reliability"
+    assert gs_tom.extract_title_from_detail_html(html) == "Data Reliability"
     assert gs_tom.extract_summary_from_detail_html(html) == "A concise summary."
     assert (
         gs_tom.find_pdf_link_from_detail_html(html, "https://www.goldmansachs.com/insights/top-of-mind/data")
@@ -44,8 +44,8 @@ def test_extract_detail_title_summary_and_pdf():
 def test_formatting_and_sanitization():
     subject = gs_tom.format_subject("2026-03-23", "Top of Mind: AI / Markets?")
     filename = gs_tom.format_attachment_filename("2026-03-23", "Top of Mind: AI / Markets?")
-    assert subject == "2026-03-23 GS ToM Top of Mind: AI / Markets?"
-    assert filename == "2026-03-23 GS ToM Top of Mind AI Markets.pdf"
+    assert subject == "2026-03-23 GS ToM AI / Markets?"
+    assert filename == "2026-03-23 GS ToM AI Markets.pdf"
 
 
 def test_recipient_parsing_and_config_validation():

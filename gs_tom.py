@@ -203,7 +203,19 @@ def clean_title(title: str) -> str:
     title = html.unescape(title or "")
     title = re.sub(r"\s+", " ", title).strip()
     title = re.sub(r"\s*[\-|]\s*Goldman Sachs\s*$", "", title, flags=re.I).strip()
+    title = re.sub(r"^Top\s+of\s+Mind\s*:\s*", "", title, flags=re.I).strip()
     return title or "Top of Mind"
+
+
+def compact_for_log(value: str, limit: int = 180) -> str:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+def log_value(value: str, limit: int = 180) -> str:
+    return compact_for_log(value, limit) or "<missing>"
 
 
 def sanitize_filename(name: str) -> str:
@@ -366,11 +378,15 @@ def goto_with_retry(page: Any, url: str, wait_until: str = "domcontentloaded") -
     last_error: Optional[Exception] = None
     for attempt in range(1, PLAYWRIGHT_RETRIES + 1):
         try:
+            logging.info("Playwright opening page: %s", url)
+            logging.debug("Playwright goto attempt %d/%d: %s", attempt, PLAYWRIGHT_RETRIES, url)
             page.goto(url, wait_until=wait_until, timeout=PLAYWRIGHT_TIMEOUT_MS)
             try:
                 page.wait_for_load_state("networkidle", timeout=10_000)
+                logging.debug("Playwright network idle reached: %s", url)
             except Exception:
                 logging.debug("Network idle was not reached for %s; continuing to selector checks.", url)
+            logging.info("Playwright loaded page: %s", url)
             return
         except Exception as exc:
             last_error = exc
@@ -380,9 +396,11 @@ def goto_with_retry(page: Any, url: str, wait_until: str = "domcontentloaded") -
 
 
 def extract_hub_cards_with_page(page: Any, hub_url: str = HUB_URL) -> List[ReportCandidate]:
+    logging.info("Extracting Top of Mind hub cards from: %s", hub_url)
     goto_with_retry(page, hub_url)
     try:
         page.wait_for_selector('a[href*="/insights/top-of-mind/"]', timeout=PLAYWRIGHT_TIMEOUT_MS)
+        logging.info("Located Top of Mind report links on hub page.")
     except PlaywrightTimeoutError as exc:
         raise RuntimeError("Timed out waiting for Top of Mind report links on hub page.") from exc
 
@@ -397,6 +415,7 @@ def extract_hub_cards_with_page(page: Any, hub_url: str = HUB_URL) -> List[Repor
             };
         })""",
     )
+    logging.info("Hub page returned %d raw Top of Mind links before dedupe.", len(raw_links))
 
     candidates_by_url: Dict[str, ReportCandidate] = {}
     for item in raw_links:
@@ -419,13 +438,24 @@ def extract_hub_cards_with_page(page: Any, hub_url: str = HUB_URL) -> List[Repor
     candidates = sorted(candidates_by_url.values(), key=lambda c: c.page_url)
     if not candidates:
         raise RuntimeError("Playwright discovered zero Top of Mind report cards.")
-    logging.info("Discovered %d Top of Mind report cards.", len(candidates))
+    logging.info("Discovered %d unique Top of Mind report cards.", len(candidates))
+    for index, candidate in enumerate(candidates, start=1):
+        logging.info(
+            "Hub card %d/%d: title=%s date=%s page=%s",
+            index,
+            len(candidates),
+            log_value(candidate.hub_title),
+            log_value(candidate.hub_date),
+            candidate.page_url,
+        )
     return candidates
 
 
 def extract_detail_with_page(page: Any, candidate: ReportCandidate, fallback_date: str) -> ReportCandidate:
+    logging.info("Extracting report detail page: %s", candidate.page_url)
     goto_with_retry(page, candidate.page_url)
     page.wait_for_selector("body", timeout=PLAYWRIGHT_TIMEOUT_MS)
+    logging.info("Located report detail body: %s", candidate.page_url)
     html_text = page.content()
     detail_title = extract_title_from_detail_html(html_text)
     detail_date = extract_date_from_detail_html(html_text)
@@ -436,6 +466,15 @@ def extract_detail_with_page(page: Any, candidate: ReportCandidate, fallback_dat
     candidate.date_source = "detail" if detail_date else ("hub" if candidate.hub_date else "fallback")
     candidate.summary = extract_summary_from_detail_html(html_text)
     candidate.pdf_url = find_pdf_link_from_detail_html(html_text, candidate.page_url) or ""
+    logging.info(
+        "Detail extracted: title=%s title_source=%s date=%s date_source=%s summary=%s pdf=%s",
+        log_value(candidate.title),
+        candidate.title_source or "<missing>",
+        log_value(candidate.date),
+        candidate.date_source or "<missing>",
+        log_value(candidate.summary, 140),
+        log_value(candidate.pdf_url),
+    )
     if not candidate.pdf_url:
         raise RuntimeError(f"No Goldman Sachs PDF link found on {candidate.page_url}")
     return candidate
@@ -445,6 +484,7 @@ def discover_and_enrich_candidates(fallback_date: str) -> Tuple[List[ReportCandi
     require_playwright()
     failures: List[str] = []
     enriched: List[ReportCandidate] = []
+    logging.info("Starting Playwright browser for Goldman Sachs discovery.")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(user_agent=HEADERS["User-Agent"])
@@ -457,13 +497,25 @@ def discover_and_enrich_candidates(fallback_date: str) -> Tuple[List[ReportCandi
         for candidate in candidates:
             detail_page = context.new_page()
             try:
+                logging.info(
+                    "Inspecting detail page %d/%d: %s",
+                    len(enriched) + 1,
+                    len(candidates),
+                    candidate.page_url,
+                )
                 enriched.append(extract_detail_with_page(detail_page, candidate, fallback_date))
             except Exception as exc:
                 candidate.detail_error = str(exc)
                 failures.append(f"{candidate.page_url}: {exc}")
+                logging.error("Detail extraction failed for %s: %s", candidate.page_url, exc)
                 enriched.append(candidate)
             finally:
                 detail_page.close()
+        logging.info(
+            "Finished Playwright discovery: enriched=%d failures=%d.",
+            len(enriched),
+            len(failures),
+        )
         browser.close()
     return enriched, failures
 
@@ -472,6 +524,7 @@ def http_get_stream(url: str) -> requests.Response:
     last_error: Optional[Exception] = None
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
+            logging.info("Downloading URL (attempt %d/%d): %s", attempt, HTTP_RETRIES, url)
             response = requests.get(
                 url,
                 headers=HEADERS,
@@ -480,6 +533,7 @@ def http_get_stream(url: str) -> requests.Response:
                 stream=True,
             )
             if 200 <= response.status_code < 400:
+                logging.info("Download response OK: status=%d url=%s", response.status_code, response.url or url)
                 return response
             last_error = RuntimeError(f"HTTP {response.status_code}")
             logging.warning("HTTP %s for %s (attempt %d)", response.status_code, url, attempt)
@@ -494,6 +548,7 @@ def download_pdf(pdf_url: str, dest_path: Path) -> int:
     if not is_allowed_host(pdf_url):
         raise RuntimeError(f"Refusing non-Goldman PDF URL: {pdf_url}")
 
+    logging.info("Downloading PDF: %s", pdf_url)
     response = http_get_stream(pdf_url)
     final_url = response.url or pdf_url
     if not is_allowed_host(final_url):
@@ -521,6 +576,7 @@ def download_pdf(pdf_url: str, dest_path: Path) -> int:
         raise RuntimeError(f"Downloaded content does not look like a PDF: {pdf_url}")
 
     tmp_path.replace(dest_path)
+    logging.info("Saved PDF: %s (%d bytes)", dest_path, total)
     return total
 
 
