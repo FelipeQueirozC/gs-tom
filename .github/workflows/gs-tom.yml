@@ -42,6 +42,7 @@ jobs:
           RESEND_TO: ${{ secrets.RESEND_TO }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_DELIVERY_CHAT_ID: ${{ secrets.TELEGRAM_DELIVERY_CHAT_ID }}
           TELEGRAM_ERROR_CHAT_ID: ${{ secrets.TELEGRAM_ERROR_CHAT_ID }}
         run: |
           set +e

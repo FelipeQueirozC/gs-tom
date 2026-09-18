@@ -2,7 +2,7 @@
 
 Daily Goldman Sachs Top of Mind collector for the OptiPlex.
 
-The collector renders Goldman Sachs pages with Playwright. It downloads the newest PDF and extracts text with `pdftotext`. OpenCode creates a Brazilian-Portuguese investor summary. Resend sends the summary and PDF by email.
+The collector renders Goldman Sachs pages with Playwright. It downloads the newest PDF and extracts text with `pdftotext`. OpenCode creates a 250–350-word Brazilian-Portuguese investor summary. Resend sends the summary and PDF by email. Telegram receives one album containing the summary HTML and full PDF.
 
 ## Model selection
 
@@ -53,6 +53,7 @@ Shared secrets:
 - `RESEND_API_KEY`
 - `OPENCODE_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_DELIVERY_CHAT_ID`
 - `TELEGRAM_ERROR_CHAT_ID`
 
 Optional values:
@@ -60,7 +61,7 @@ Optional values:
 - `OPENCODE_BASE_URL`
 - `OPENCODE_SUMMARIZER_MODEL`
 
-Failures send one deduplicated and sanitized Telegram notification to the error chat.
+Failures send one deduplicated and sanitized Telegram notification to the error chat. Delivery state is saved after each provider call. A retry sends only a missing email or Telegram album.
 
 ## Tests
 

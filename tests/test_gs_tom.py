@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import os
 
 import pytest
@@ -124,6 +125,8 @@ def test_opencode_summary_uses_selected_model_and_stable_session(monkeypatch):
 
     assert gs_tom.summarize_report(candidate, "x" * 500, config, "deepseek-v4.2-pro") == "Resumo"
     assert calls[0][1]["json"]["model"] == "deepseek-v4.2-pro"
+    prompt = calls[0][1]["json"]["messages"][0]["content"]
+    assert "250 a 350 palavras" in prompt
     assert len(calls[0][1]["headers"]["x-opencode-session"]) == 64
 
 
@@ -165,6 +168,144 @@ def test_resend_payload_with_attachment():
     assert params["attachments"][0]["content"].startswith("JVBER")
     assert "deepseek-v4.2-pro" in params["html"]
     assert "Ação &lt; risco." in params["html"]
+
+
+def test_telegram_album_contains_html_summary_and_pdf(tmp_path, monkeypatch):
+    summary_path = tmp_path / "summary.html"
+    pdf_path = tmp_path / "report.pdf"
+    summary_path.write_text("<html>summary</html>", encoding="utf-8")
+    pdf_path.write_bytes(b"%PDF-1.7")
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "ok": True,
+                "result": [
+                    {"message_id": 10, "media_group_id": "album-1"},
+                    {"message_id": 11, "media_group_id": "album-1"},
+                ],
+            }
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(gs_tom.requests, "post", post)
+    config = gs_tom.TelegramConfig("token", "chat")
+    message_ids, media_group_id = gs_tom.send_telegram_album(
+        config, summary_path, pdf_path, "Report — 2026-01-01"
+    )
+
+    assert message_ids == ["10", "11"]
+    assert media_group_id == "album-1"
+    assert calls[0][0].endswith("/bottoken/sendMediaGroup")
+    media = json.loads(calls[0][1]["data"]["media"])
+    assert [item["media"] for item in media] == ["attach://summary", "attach://report"]
+    assert set(calls[0][1]["files"]) == {"summary", "report"}
+
+
+def test_prepares_html_summary_artifact_before_delivery(tmp_path, monkeypatch):
+    candidate = gs_tom.ReportCandidate(
+        page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
+        title="Sample",
+        date="2026-03-23",
+        pdf_url="https://www.goldmansachs.com/pdfs/sample.pdf",
+    )
+    state = {}
+    state_path = tmp_path / "state.json"
+
+    def download(_url, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF-1.7")
+        return path.stat().st_size
+
+    monkeypatch.setattr(gs_tom, "download_pdf", download)
+    monkeypatch.setattr(gs_tom, "extract_pdf_text", lambda _path: "report text")
+    monkeypatch.setattr(gs_tom, "summarize_report", lambda *_args: "Resumo compacto")
+
+    pdf_path, summary_path, _size = gs_tom.prepare_candidate(
+        candidate,
+        tmp_path,
+        state,
+        state_path,
+        gs_tom.OpenCodeConfig("key", "https://example.com/v1", "model"),
+        "deepseek-v4.2-pro",
+    )
+
+    assert pdf_path.is_file()
+    assert summary_path.read_text(encoding="utf-8").startswith("<html>")
+    assert "Resumo compacto" in summary_path.read_text(encoding="utf-8")
+    assert state[candidate.page_url]["status"] == "prepared"
+
+
+def test_partial_delivery_retry_does_not_repeat_email(tmp_path):
+    candidate = gs_tom.ReportCandidate(
+        page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
+        title="Sample",
+        date="2026-03-23",
+        ai_summary="Resumo",
+        summary_model="deepseek-v4-pro",
+        pdf_url="https://www.goldmansachs.com/pdfs/sample.pdf",
+    )
+    pdf_path = tmp_path / "report.pdf"
+    summary_path = tmp_path / "summary.html"
+    pdf_path.write_bytes(b"%PDF-1.7")
+    summary_path.write_text("<html>Resumo</html>", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state = {
+        candidate.page_url: {
+            "status": "prepared",
+            "file": str(pdf_path),
+            "summary_file": str(summary_path),
+            "attachment_sent": True,
+        }
+    }
+    email_calls = []
+    telegram_calls = []
+
+    def email_sender(_params, _key):
+        email_calls.append(True)
+        return "email-1"
+
+    def telegram_sender(*_args):
+        telegram_calls.append(True)
+        if len(telegram_calls) == 1:
+            raise RuntimeError("Telegram unavailable")
+        return ["10", "11"], "album-1"
+
+    with pytest.raises(RuntimeError, match="Telegram unavailable"):
+        gs_tom.deliver_prepared_candidate(
+            candidate,
+            pdf_path,
+            summary_path,
+            state,
+            state_path,
+            gs_tom.ResendConfig("key", "from@example.com", ["to@example.com"]),
+            gs_tom.TelegramConfig("token", "chat"),
+            email_sender=email_sender,
+            telegram_sender=telegram_sender,
+        )
+
+    gs_tom.deliver_prepared_candidate(
+        candidate,
+        pdf_path,
+        summary_path,
+        state,
+        state_path,
+        gs_tom.ResendConfig("key", "from@example.com", ["to@example.com"]),
+        gs_tom.TelegramConfig("token", "chat"),
+        email_sender=email_sender,
+        telegram_sender=telegram_sender,
+    )
+
+    assert len(email_calls) == 1
+    assert len(telegram_calls) == 2
+    assert state[candidate.page_url]["status"] == "ok"
+    assert state[candidate.page_url]["telegram_message_ids"] == ["10", "11"]
 
 
 def test_resend_payload_link_only():
