@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Goldman Sachs Top of Mind daily at 12:30 BRT
+
+[Timer]
+OnCalendar=*-*-* 12:30:00 America/Sao_Paulo
+Persistent=true
+Unit=gs-tom.service
+
+[Install]
+WantedBy=timers.target

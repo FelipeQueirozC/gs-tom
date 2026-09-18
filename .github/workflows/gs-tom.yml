@@ -1,8 +1,6 @@
 name: Daily GS ToM Downloader
 
 on:
-  schedule:
-    - cron: "0 15 * * *"
   workflow_dispatch:
 
 permissions:
@@ -30,6 +28,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           playwright install --with-deps chromium
@@ -40,9 +40,12 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_FROM: ${{ secrets.RESEND_FROM }}
           RESEND_TO: ${{ secrets.RESEND_TO }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ERROR_CHAT_ID: ${{ secrets.TELEGRAM_ERROR_CHAT_ID }}
         run: |
           set +e
-          python gs_tom.py
+          python gs_tom.py --state gs_top_of_mind_state.json
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
           set -e

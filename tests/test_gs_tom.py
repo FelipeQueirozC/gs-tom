@@ -86,9 +86,65 @@ def test_processed_and_sorting_state_behavior():
     old = gs_tom.ReportCandidate("https://example.com/old", date="2026-01-01")
     new = gs_tom.ReportCandidate("https://example.com/new", date="2026-02-01")
     assert sorted([new, old], key=gs_tom.sort_key_oldest) == [old, new]
-    state = {old.page_url: {"status": "skipped-bootstrap"}}
+    state = {old.page_url: {"status": "skipped-migration"}}
     assert gs_tom.processed(state, old)
     assert not gs_tom.processed(state, new)
+
+    selected, skipped = gs_tom.select_migration_candidates([new, old])
+    assert selected == new
+    assert skipped == [old]
+
+
+def test_latest_deepseek_pro_model_selection():
+    models = [
+        "deepseek-v4-pro",
+        "deepseek-v4.1-flash",
+        "deepseek-v4.2-pro",
+        "deepseek-v4.3-pro-vision",
+    ]
+    assert gs_tom.latest_deepseek_pro_model(models) == "deepseek-v4.2-pro"
+
+
+def test_opencode_summary_uses_selected_model_and_stable_session(monkeypatch):
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Resumo"}, "finish_reason": "stop"}]}
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(gs_tom.requests, "post", post)
+    candidate = gs_tom.ReportCandidate("https://example.com/report", title="Report", date="2026-01-01")
+    config = gs_tom.OpenCodeConfig("key", "https://example.com/v1", "latest-deepseek-pro")
+
+    assert gs_tom.summarize_report(candidate, "x" * 500, config, "deepseek-v4.2-pro") == "Resumo"
+    assert calls[0][1]["json"]["model"] == "deepseek-v4.2-pro"
+    assert len(calls[0][1]["headers"]["x-opencode-session"]) == 64
+
+
+def test_error_notification_is_sanitized_and_sent_once(tmp_path):
+    sent = []
+    env = {
+        "TELEGRAM_BOT_TOKEN": "telegram-secret",
+        "TELEGRAM_ERROR_CHAT_ID": "-1001",
+        "OPENCODE_API_KEY": "opencode-secret",
+    }
+
+    def sender(_token, _chat_id, message):
+        sent.append(message)
+        return "42"
+
+    state_path = tmp_path / "state.json"
+    error = "OpenCode rejected opencode-secret and telegram-secret"
+    assert gs_tom.notify_error_once(state_path, error, env=env, sender=sender)
+    assert not gs_tom.notify_error_once(state_path, error, env=env, sender=sender)
+    assert len(sent) == 1
+    assert "secret" not in sent[0]
 
 
 def test_resend_payload_with_attachment():
@@ -97,6 +153,8 @@ def test_resend_payload_with_attachment():
         title="Sample",
         date="2026-03-23",
         summary="Summary",
+        ai_summary="## Tese\n\nAção < risco.",
+        summary_model="deepseek-v4.2-pro",
         pdf_url="https://www.goldmansachs.com/pdfs/sample.pdf",
     )
     config = gs_tom.ResendConfig("re_test", "GS <gs@example.com>", ["to@example.com"])
@@ -105,6 +163,8 @@ def test_resend_payload_with_attachment():
     assert params["to"] == ["to@example.com"]
     assert params["attachments"][0]["filename"] == "2026-03-23 GS ToM Sample.pdf"
     assert params["attachments"][0]["content"].startswith("JVBER")
+    assert "deepseek-v4.2-pro" in params["html"]
+    assert "Ação &lt; risco." in params["html"]
 
 
 def test_resend_payload_link_only():

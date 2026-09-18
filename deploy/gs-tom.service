@@ -1,0 +1,19 @@
+[Unit]
+Description=Goldman Sachs Top of Mind summarizer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=usuario
+WorkingDirectory=/home/usuario/projetos/gs-tom
+EnvironmentFile=-/etc/collector-env/common.env
+EnvironmentFile=/home/usuario/projetos/gs-tom/.env
+ExecStart=/home/usuario/projetos/gs-tom/.venv/bin/python gs_tom.py
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/usuario/projetos/gs-tom
