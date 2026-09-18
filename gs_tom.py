@@ -75,6 +75,10 @@ DETAIL_DATE_RE = re.compile(
     r'"(?:publishDate|datePublished)"\s*:\s*"([^"]+)"',
     re.I,
 )
+MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+MARKDOWN_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+MARKDOWN_HR_RE = re.compile(r"^\s*-{3,}\s*$")
 
 
 @dataclass
@@ -840,25 +844,95 @@ def summarize_report(
     raise RuntimeError(f"OpenCode summary failed with {model}: {last_error}") from last_error
 
 
+def markdown_to_safe_html(text: str) -> str:
+    out: List[str] = []
+    paragraph: List[str] = []
+    list_open = False
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if paragraph:
+            out.append(f"<p>{markdown_inline(' '.join(paragraph).strip())}</p>")
+            paragraph = []
+
+    def close_list() -> None:
+        nonlocal list_open
+        if list_open:
+            out.append("</ul>")
+            list_open = False
+
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            flush_paragraph()
+            close_list()
+            continue
+        heading = MARKDOWN_HEADING_RE.match(line)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = min(len(heading.group(1)), 6)
+            out.append(f"<h{level}>{markdown_inline(heading.group(2).strip())}</h{level}>")
+            continue
+        if MARKDOWN_HR_RE.match(line):
+            flush_paragraph()
+            close_list()
+            out.append("<hr>")
+            continue
+        bullet = MARKDOWN_BULLET_RE.match(line)
+        if bullet:
+            flush_paragraph()
+            if not list_open:
+                out.append("<ul>")
+                list_open = True
+            out.append(f"<li>{markdown_inline(bullet.group(1).strip())}</li>")
+            continue
+        close_list()
+        paragraph.append(line.strip())
+
+    flush_paragraph()
+    close_list()
+    return "\n".join(out)
+
+
+def markdown_inline(text: str) -> str:
+    return MARKDOWN_BOLD_RE.sub(r"<strong>\1</strong>", html.escape(text))
+
+
 def build_summary_html(candidate: ReportCandidate, subject: str, note: str = "") -> str:
-    summary = html.escape(candidate.summary) if candidate.summary else ""
-    summary_html = f"<p>{summary}</p>" if summary else ""
-    return f"""
-    <html>
-      <body>
-        <div style="font-family:Segoe UI, Arial, sans-serif; font-size:14px; line-height:1.45;">
-          <p><strong>{html.escape(subject)}</strong></p>
-          <p>{html.escape(candidate.date)} - {html.escape(candidate.display_title)}</p>
-          {summary_html}
-          <h2>Resumo em português</h2>
-          <div style="white-space:pre-wrap">{html.escape(candidate.ai_summary)}</div>
-          <p><small>Modelo: {html.escape(candidate.summary_model)}</small></p>
-          <p><a href="{html.escape(candidate.page_url, quote=True)}">Goldman Sachs report page</a></p>
-          {note}
-        </div>
-      </body>
-    </html>
-    """.strip()
+    description = (
+        f"<p><strong>Descrição:</strong> {html.escape(candidate.summary)}</p>"
+        if candidate.summary
+        else ""
+    )
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        f"<title>{html.escape(subject)}</title></head>"
+        '<body style="font-family: -apple-system, sans-serif; line-height: 1.5; '
+        'max-width: 720px; margin: 2em auto; padding: 0 1em; color: #222;">\n'
+        f"<h1>{html.escape(candidate.display_title)}</h1>\n"
+        '<p style="color: #666;">'
+        "<strong>Relatório:</strong> Goldman Sachs Top of Mind &middot; "
+        f"<strong>Data:</strong> {html.escape(candidate.date)} &middot; "
+        f"<strong>Modelo:</strong> {html.escape(candidate.summary_model)}"
+        "</p>\n"
+        f"{description}\n"
+        f"{markdown_to_safe_html(candidate.ai_summary)}\n"
+        f"{note}\n"
+        "<hr><p style=\"color: #888; font-size: 0.85em;\">"
+        f'<a href="{html.escape(candidate.page_url, quote=True)}">'
+        "Abrir a página do relatório</a> · O relatório completo está no anexo PDF.</p>\n"
+        "</body></html>"
+    )
+
+
+def build_email_text(candidate: ReportCandidate, subject: str) -> str:
+    return (
+        f"{subject}\n\n"
+        f"Goldman Sachs Top of Mind · {candidate.date}\n\n"
+        f"{candidate.ai_summary.strip()}\n\n"
+        f"Página do relatório: {candidate.page_url}\n"
+    )
 
 
 def build_email_html(candidate: ReportCandidate, subject: str, attachment_sent: bool) -> str:
@@ -884,6 +958,7 @@ def build_resend_params(
         "from": config.from_email,
         "to": config.to,
         "subject": subject,
+        "text": build_email_text(candidate, subject),
         "html": build_email_html(candidate, subject, attachment_sent),
     }
     if attachment_sent:
@@ -1033,6 +1108,12 @@ def prepare_candidate(
     ):
         candidate.ai_summary = str(record["ai_summary"])
         candidate.summary_model = str(record["summary_model"])
+        summary_path.write_text(
+            build_summary_html(
+                candidate, format_subject(candidate.date, candidate.display_title)
+            ),
+            encoding="utf-8",
+        )
         return pdf_path, summary_path, pdf_path.stat().st_size
 
     if not candidate.pdf_url:

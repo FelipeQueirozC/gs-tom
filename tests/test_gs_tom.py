@@ -150,6 +150,25 @@ def test_error_notification_is_sanitized_and_sent_once(tmp_path):
     assert "secret" not in sent[0]
 
 
+def test_summary_markdown_renders_as_safe_formatted_html():
+    candidate = gs_tom.ReportCandidate(
+        page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
+        title="Sample Report",
+        date="2026-03-23",
+        ai_summary="## Tese central\n\nTexto <script>alert(1)</script>.\n\n## Riscos\n\n- Risco um\n- Risco dois",
+        summary_model="deepseek-v4-pro",
+    )
+
+    output = gs_tom.build_summary_html(candidate, "GS ToM Sample")
+
+    assert "<h2>Tese central</h2>" in output
+    assert "<p>Texto &lt;script&gt;alert(1)&lt;/script&gt;.</p>" in output
+    assert "<li>Risco um</li>" in output
+    assert "## Tese central" not in output
+    assert "max-width: 720px" in output
+    assert "font-family: -apple-system, sans-serif" in output
+
+
 def test_resend_payload_with_attachment():
     candidate = gs_tom.ReportCandidate(
         page_url="https://www.goldmansachs.com/insights/top-of-mind/sample",
@@ -225,7 +244,9 @@ def test_prepares_html_summary_artifact_before_delivery(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gs_tom, "download_pdf", download)
     monkeypatch.setattr(gs_tom, "extract_pdf_text", lambda _path: "report text")
-    monkeypatch.setattr(gs_tom, "summarize_report", lambda *_args: "Resumo compacto")
+    monkeypatch.setattr(
+        gs_tom, "summarize_report", lambda *_args: "## Tese central\n\nResumo compacto"
+    )
 
     pdf_path, summary_path, _size = gs_tom.prepare_candidate(
         candidate,
@@ -237,9 +258,20 @@ def test_prepares_html_summary_artifact_before_delivery(tmp_path, monkeypatch):
     )
 
     assert pdf_path.is_file()
-    assert summary_path.read_text(encoding="utf-8").startswith("<html>")
-    assert "Resumo compacto" in summary_path.read_text(encoding="utf-8")
+    assert summary_path.read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert "<h2>Tese central</h2>" in summary_path.read_text(encoding="utf-8")
     assert state[candidate.page_url]["status"] == "prepared"
+
+    summary_path.write_text("old renderer", encoding="utf-8")
+    gs_tom.prepare_candidate(
+        candidate,
+        tmp_path,
+        state,
+        state_path,
+        gs_tom.OpenCodeConfig("key", "https://example.com/v1", "model"),
+        "deepseek-v4.2-pro",
+    )
+    assert "<h2>Tese central</h2>" in summary_path.read_text(encoding="utf-8")
 
 
 def test_partial_delivery_retry_does_not_repeat_email(tmp_path):
